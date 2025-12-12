@@ -15,18 +15,6 @@ on:
         required: false
         type: boolean
         default: false
-      tf-state-rg:
-        required: true
-        type: string
-      tf-state-storage-account:
-        required: true
-        type: string
-      tf-state-container:
-        required: true
-        type: string
-      tf-state-key:
-        required: true
-        type: string
       extra-env-vars:
         required: false
         type: string
@@ -45,6 +33,16 @@ on:
         required: true
       AZURE_CLIENT_ID_APPLY:
         required: true
+      TF_STATE_RG:
+        required: true
+      TF_STATE_STORAGE_ACCOUNT:
+        required: true
+      TF_STATE_CONTAINER:
+        required: true
+      TF_STATE_KEY:
+        required: true
+      SUBSCRIPTION_ID:
+        required: false
 
 jobs:
   validate:
@@ -74,14 +72,18 @@ jobs:
         with:
           terraform_version: ${{ inputs.terraform-version }}
 
+      - name: Set TF_VAR_subscription_id from secret
+        if: ${{ secrets.SUBSCRIPTION_ID != '' }}
+        run: echo "TF_VAR_subscription_id=${{ secrets.SUBSCRIPTION_ID }}" >> $GITHUB_ENV
+
       - name: Terraform Init
         working-directory: ${{ inputs.working-directory }}
         run: |
           terraform init \
-            -backend-config="resource_group_name=${{ inputs.tf-state-rg }}" \
-            -backend-config="storage_account_name=${{ inputs.tf-state-storage-account }}" \
-            -backend-config="container_name=${{ inputs.tf-state-container }}" \
-            -backend-config="key=${{ inputs.tf-state-key }}" \
+            -backend-config="resource_group_name=${{ secrets.TF_STATE_RG }}" \
+            -backend-config="storage_account_name=${{ secrets.TF_STATE_STORAGE_ACCOUNT }}" \
+            -backend-config="container_name=${{ secrets.TF_STATE_CONTAINER }}" \
+            -backend-config="key=${{ secrets.TF_STATE_KEY }}" \
             -backend-config="use_azuread_auth=true" \
             -backend-config="use_oidc=true"
 
@@ -129,14 +131,18 @@ jobs:
         with:
           terraform_version: ${{ inputs.terraform-version }}
 
+      - name: Set TF_VAR_subscription_id from secret
+        if: ${{ secrets.SUBSCRIPTION_ID != '' }}
+        run: echo "TF_VAR_subscription_id=${{ secrets.SUBSCRIPTION_ID }}" >> $GITHUB_ENV
+
       - name: Terraform Init
         working-directory: ${{ inputs.working-directory }}
         run: |
           terraform init \
-            -backend-config="resource_group_name=${{ inputs.tf-state-rg }}" \
-            -backend-config="storage_account_name=${{ inputs.tf-state-storage-account }}" \
-            -backend-config="container_name=${{ inputs.tf-state-container }}" \
-            -backend-config="key=${{ inputs.tf-state-key }}" \
+            -backend-config="resource_group_name=${{ secrets.TF_STATE_RG }}" \
+            -backend-config="storage_account_name=${{ secrets.TF_STATE_STORAGE_ACCOUNT }}" \
+            -backend-config="container_name=${{ secrets.TF_STATE_CONTAINER }}" \
+            -backend-config="key=${{ secrets.TF_STATE_KEY }}" \
             -backend-config="use_azuread_auth=true" \
             -backend-config="use_oidc=true"
 
@@ -185,14 +191,18 @@ jobs:
         with:
           terraform_version: ${{ inputs.terraform-version }}
 
+      - name: Set TF_VAR_subscription_id from secret
+        if: ${{ secrets.SUBSCRIPTION_ID != '' }}
+        run: echo "TF_VAR_subscription_id=${{ secrets.SUBSCRIPTION_ID }}" >> $GITHUB_ENV
+
       - name: Terraform Init
         working-directory: ${{ inputs.working-directory }}
         run: |
           terraform init \
-            -backend-config="resource_group_name=${{ inputs.tf-state-rg }}" \
-            -backend-config="storage_account_name=${{ inputs.tf-state-storage-account }}" \
-            -backend-config="container_name=${{ inputs.tf-state-container }}" \
-            -backend-config="key=${{ inputs.tf-state-key }}" \
+            -backend-config="resource_group_name=${{ secrets.TF_STATE_RG }}" \
+            -backend-config="storage_account_name=${{ secrets.TF_STATE_STORAGE_ACCOUNT }}" \
+            -backend-config="container_name=${{ secrets.TF_STATE_CONTAINER }}" \
+            -backend-config="key=${{ secrets.TF_STATE_KEY }}" \
             -backend-config="use_azuread_auth=true" \
             -backend-config="use_oidc=true"
 
