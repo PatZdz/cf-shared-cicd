@@ -38,3 +38,7 @@ terraform.rc
 
 task.md
 
+cf_container_app/terraform-infra.yml
+
+cf_static_website/terraform.yml
+cf_static_website/terraform-destroy.yml
