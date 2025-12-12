@@ -1,0 +1,211 @@
+name: Reusable Terraform Workflow
+
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        required: false
+        type: string
+        default: '.'
+      terraform-version:
+        required: false
+        type: string
+        default: '1.6.6'
+      apply:
+        required: false
+        type: boolean
+        default: false
+      tf-state-rg:
+        required: true
+        type: string
+      tf-state-storage-account:
+        required: true
+        type: string
+      tf-state-container:
+        required: true
+        type: string
+      tf-state-key:
+        required: true
+        type: string
+      extra-env-vars:
+        required: false
+        type: string
+        description: "Multiline string of extra env vars, e.g. KEY=VAL"
+      environment-name:
+        required: false
+        type: string
+        description: "Environment name for deployment approvals (e.g. production)"
+    secrets:
+      AZURE_TENANT_ID:
+        required: true
+      AZURE_SUBSCRIPTION_ID:
+        required: true
+      AZURE_CLIENT_ID_PLAN:
+        required: true
+      AZURE_CLIENT_ID_APPLY:
+        required: true
+
+jobs:
+  validate:
+    name: Validate
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID_PLAN }}
+      ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      ARM_USE_OIDC: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure login (Plan identity)
+        uses: azure/login@v2
+        with:
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          client-id: ${{ secrets.AZURE_CLIENT_ID_PLAN }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ inputs.terraform-version }}
+
+      - name: Terraform Init
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          terraform init \
+            -backend-config="resource_group_name=${{ inputs.tf-state-rg }}" \
+            -backend-config="storage_account_name=${{ inputs.tf-state-storage-account }}" \
+            -backend-config="container_name=${{ inputs.tf-state-container }}" \
+            -backend-config="key=${{ inputs.tf-state-key }}" \
+            -backend-config="use_azuread_auth=true" \
+            -backend-config="use_oidc=true"
+
+      - name: Terraform Fmt
+        working-directory: ${{ inputs.working-directory }}
+        run: terraform fmt -check -recursive
+
+      - name: Terraform Validate
+        working-directory: ${{ inputs.working-directory }}
+        run: terraform validate
+
+      - name: Install TFLint
+        run: |
+          curl -s https://raw.githubusercontent.com/terraform-linters/tflint/master/install_linux.sh | bash
+
+      - name: Run TFLint
+        working-directory: ${{ inputs.working-directory }}
+        run: tflint --init && tflint
+
+  plan:
+    name: Plan
+    needs: validate
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID_PLAN }}
+      ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      ARM_USE_OIDC: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure login (Plan identity)
+        uses: azure/login@v2
+        with:
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          client-id: ${{ secrets.AZURE_CLIENT_ID_PLAN }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ inputs.terraform-version }}
+
+      - name: Terraform Init
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          terraform init \
+            -backend-config="resource_group_name=${{ inputs.tf-state-rg }}" \
+            -backend-config="storage_account_name=${{ inputs.tf-state-storage-account }}" \
+            -backend-config="container_name=${{ inputs.tf-state-container }}" \
+            -backend-config="key=${{ inputs.tf-state-key }}" \
+            -backend-config="use_azuread_auth=true" \
+            -backend-config="use_oidc=true"
+
+      - name: Set Extra Env Vars
+        if: ${{ inputs.extra-env-vars != '' }}
+        run: |
+          echo "${{ inputs.extra-env-vars }}" >> $GITHUB_ENV
+
+      - name: Terraform Plan
+        working-directory: ${{ inputs.working-directory }}
+        run: terraform plan -out=tfplan
+
+      - name: Upload tfplan artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfplan-${{ github.run_id }}
+          path: ${{ inputs.working-directory }}/tfplan
+
+  apply:
+    name: Apply
+    needs: plan
+    if: ${{ inputs.apply }}
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment-name }}
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID_APPLY }}
+      ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      ARM_USE_OIDC: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure login (Apply identity)
+        uses: azure/login@v2
+        with:
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          client-id: ${{ secrets.AZURE_CLIENT_ID_APPLY }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ inputs.terraform-version }}
+
+      - name: Terraform Init
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          terraform init \
+            -backend-config="resource_group_name=${{ inputs.tf-state-rg }}" \
+            -backend-config="storage_account_name=${{ inputs.tf-state-storage-account }}" \
+            -backend-config="container_name=${{ inputs.tf-state-container }}" \
+            -backend-config="key=${{ inputs.tf-state-key }}" \
+            -backend-config="use_azuread_auth=true" \
+            -backend-config="use_oidc=true"
+
+      - name: Download tfplan artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: tfplan-${{ github.run_id }}
+          path: ${{ inputs.working-directory }}
+
+      - name: Set Extra Env Vars
+        if: ${{ inputs.extra-env-vars != '' }}
+        run: |
+          echo "${{ inputs.extra-env-vars }}" >> $GITHUB_ENV
+
+      - name: Terraform Apply
+        working-directory: ${{ inputs.working-directory }}
+        run: terraform apply -auto-approve tfplan

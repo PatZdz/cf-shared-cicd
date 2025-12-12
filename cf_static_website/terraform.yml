@@ -1,0 +1,74 @@
+name: Terraform CI/CD
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: "Run Terraform apply"
+        required: true
+        type: boolean
+        default: false
+
+concurrency:
+  group: terraform-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  setup:
+    name: Ensure Remote State
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID_PLAN }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      
+      - name: Ensure Remote State Backend
+        uses: azure/CLI@v2
+        with:
+          inlineScript: |
+            set -e
+            RG_NAME="${{ secrets.TFSTATE_RG_NAME }}"
+            SA_NAME="${{ secrets.TFSTATE_SA_NAME }}"
+            CONTAINER_NAME="${{ secrets.TFSTATE_CONTAINER_NAME }}"
+            
+            az group create -n "$RG_NAME" -l ${{ secrets.TFSTATE_LOCATION }}
+            az storage account show -n "$SA_NAME" -g "$RG_NAME" >/dev/null 2>&1 || \
+              az storage account create -n "$SA_NAME" -g "$RG_NAME" -l ${{ secrets.TFSTATE_LOCATION }} \
+                --sku Standard_LRS --encryption-services blob
+            
+            az storage container show --account-name "$SA_NAME" --name "$CONTAINER_NAME" --auth-mode login >/dev/null 2>&1 || \
+              az storage container create --account-name "$SA_NAME" --name "$CONTAINER_NAME" --auth-mode login
+
+            # Role assignments
+            SA_ID=$(az storage account show -n "$SA_NAME" -g "$RG_NAME" --query id -o tsv)
+            az role assignment create --assignee ${{ secrets.AZURE_CLIENT_ID_PLAN }} --role "Storage Blob Data Contributor" --scope "$SA_ID" || true
+            az role assignment create --assignee ${{ secrets.AZURE_CLIENT_ID_APPLY }} --role "Storage Blob Data Contributor" --scope "$SA_ID" || true
+
+  terraform:
+    name: Terraform Pipeline
+    needs: setup
+    uses: ./.github/workflows/reusable-terraform.yml
+    with:
+      working-directory: .
+      terraform-version: 1.6.6
+      apply: ${{ inputs.apply == true }}
+      tf-state-rg: ${{ secrets.TFSTATE_RG_NAME }}
+      tf-state-storage-account: ${{ secrets.TFSTATE_SA_NAME }}
+      tf-state-container: ${{ secrets.TFSTATE_CONTAINER_NAME }}
+      tf-state-key: ${{ secrets.TFSTATE_KEY }}
+      environment-name: production
+      extra-env-vars: |
+        TF_VAR_subscription_id=${{ secrets.AZURE_SUBSCRIPTION_ID }}
+    secrets:
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      AZURE_CLIENT_ID_PLAN: ${{ secrets.AZURE_CLIENT_ID_PLAN }}
+      AZURE_CLIENT_ID_APPLY: ${{ secrets.AZURE_CLIENT_ID_APPLY }}

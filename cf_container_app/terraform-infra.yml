@@ -1,0 +1,136 @@
+name: terraform-infra
+
+on:
+  push:
+    branches:
+      - main
+      - feature/**
+      - fix/**
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: "Run Terraform apply using saved tfplan"
+        required: true
+        type: boolean
+        default: false
+      destroy:
+        description: "Run Terraform destroy (delete all resources)"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  id-token: write
+  contents: read
+  actions: read
+
+concurrency:
+  group: terraform-infra-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  TF_WORKING_DIR: infra
+  ACR_NAME: cfacrpatryktf
+  IMAGE_NAME: cf-hello-app
+  IMAGE_TAG: ${{ github.sha }}
+
+jobs:
+  build_image:
+    name: Build & Push Docker Image to ACR
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.apply }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure login (Apply identity)
+        uses: azure/login@v2
+        with:
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          client-id: ${{ secrets.AZURE_CLIENT_ID_APPLY }}
+
+      - name: ACR Login
+        run: az acr login --name ${{ env.ACR_NAME }}
+
+      - name: Build image
+        run: |
+          docker build -t ${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }} .
+
+      - name: Push image
+        run: |
+          docker push ${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+
+  terraform:
+    name: Terraform Pipeline
+    needs: build_image
+    if: always() && (needs.build_image.result == 'success' || needs.build_image.result == 'skipped') && !inputs.destroy
+    uses: ./.github/workflows/reusable-terraform.yml
+    with:
+      working-directory: infra
+      terraform-version: 1.6.6
+      apply: ${{ inputs.apply == true }}
+      tf-state-rg: ${{ secrets.TF_STATE_RG }}
+      tf-state-storage-account: ${{ secrets.TF_STATE_STORAGE_ACCOUNT }}
+      tf-state-container: ${{ secrets.TF_STATE_CONTAINER }}
+      tf-state-key: ${{ secrets.TF_STATE_KEY }}
+      extra-env-vars: |
+        TF_VAR_container_image=${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+    secrets:
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      AZURE_CLIENT_ID_PLAN: ${{ secrets.AZURE_CLIENT_ID_PLAN }}
+      AZURE_CLIENT_ID_APPLY: ${{ secrets.AZURE_CLIENT_ID_APPLY }}
+
+  destroy:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.destroy }}
+    name: Terraform Destroy (manual)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure login (Apply identity)
+        uses: azure/login@v2
+        with:
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          client-id: ${{ secrets.AZURE_CLIENT_ID_APPLY }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.6.6
+
+      - name: Terraform Init (remote backend)
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: |
+          terraform init \
+            -backend-config="resource_group_name=${{ secrets.TF_STATE_RG }}" \
+            -backend-config="storage_account_name=${{ secrets.TF_STATE_STORAGE_ACCOUNT }}" \
+            -backend-config="container_name=${{ secrets.TF_STATE_CONTAINER }}" \
+            -backend-config="key=${{ secrets.TF_STATE_KEY }}" \
+            -backend-config="use_azuread_auth=true"
+
+      - name: Remove resources from TF state (workarounds)
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: |
+          # Remove role assignment if exists (to avoid 403)
+          if terraform state list | grep -q 'module.app_container.azurerm_role_assignment.acr_pull'; then
+            terraform state rm 'module.app_container.azurerm_role_assignment.acr_pull'
+          fi
+          
+          # Remove RG from state (to avoid 403 on polling)
+          if terraform state list | grep -q 'azurerm_resource_group.this'; then
+            terraform state rm 'azurerm_resource_group.this'
+          fi
+
+      - name: Terraform Destroy
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform destroy -auto-approve
+
+      - name: Delete Resource Group via CLI (ensure cleanup)
+        if: always()
+        continue-on-error: true
+        run: |
+          az group delete --name rg-cf-container-app-tf --yes --no-wait || true
