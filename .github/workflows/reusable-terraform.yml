@@ -35,6 +35,7 @@ on:
         required: false
         type: string
         description: "Environment name for deployment approvals (e.g. production)"
+        default: 'production'
     secrets:
       AZURE_TENANT_ID:
         required: true
