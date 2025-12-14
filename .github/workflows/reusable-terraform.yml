@@ -72,9 +72,9 @@ jobs:
         with:
           terraform_version: ${{ inputs.terraform-version }}
 
-      - name: Set TF_VAR_subscription_id from secret
-        if: ${{ secrets.SUBSCRIPTION_ID != '' }}
-        run: echo "TF_VAR_subscription_id=${{ secrets.SUBSCRIPTION_ID }}" >> $GITHUB_ENV
+      - name: Set TF_VAR_subscription_id from env
+        if: ${{ env.SUBSCRIPTION_ID != '' }}
+        run: echo "TF_VAR_subscription_id=${SUBSCRIPTION_ID}" >> $GITHUB_ENV
 
       - name: Terraform Init
         working-directory: ${{ inputs.working-directory }}
@@ -131,9 +131,9 @@ jobs:
         with:
           terraform_version: ${{ inputs.terraform-version }}
 
-      - name: Set TF_VAR_subscription_id from secret
-        if: ${{ secrets.SUBSCRIPTION_ID != '' }}
-        run: echo "TF_VAR_subscription_id=${{ secrets.SUBSCRIPTION_ID }}" >> $GITHUB_ENV
+      - name: Set TF_VAR_subscription_id from env
+        if: ${{ env.SUBSCRIPTION_ID != '' }}
+        run: echo "TF_VAR_subscription_id=${SUBSCRIPTION_ID}" >> $GITHUB_ENV
 
       - name: Terraform Init
         working-directory: ${{ inputs.working-directory }}
@@ -191,9 +191,9 @@ jobs:
         with:
           terraform_version: ${{ inputs.terraform-version }}
 
-      - name: Set TF_VAR_subscription_id from secret
-        if: ${{ secrets.SUBSCRIPTION_ID != '' }}
-        run: echo "TF_VAR_subscription_id=${{ secrets.SUBSCRIPTION_ID }}" >> $GITHUB_ENV
+      - name: Set TF_VAR_subscription_id from env
+        if: ${{ env.SUBSCRIPTION_ID != '' }}
+        run: echo "TF_VAR_subscription_id=${SUBSCRIPTION_ID}" >> $GITHUB_ENV
 
       - name: Terraform Init
         working-directory: ${{ inputs.working-directory }}
@@ -220,4 +220,3 @@ jobs:
       - name: Terraform Apply
         working-directory: ${{ inputs.working-directory }}
         run: terraform apply -auto-approve tfplan
-
