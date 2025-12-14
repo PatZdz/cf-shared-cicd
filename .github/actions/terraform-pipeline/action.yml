@@ -1,0 +1,98 @@
+name: terraform-pipeline
+description: Validate, plan and optionally apply Terraform with Azure OIDC backend
+inputs:
+  working-directory:
+    description: Directory with Terraform configuration
+    required: false
+    default: '.'
+  terraform-version:
+    description: Terraform version
+    required: false
+    default: '1.6.6'
+  apply:
+    description: Whether to apply the plan
+    required: false
+    default: 'false'
+  extra-env-vars:
+    description: Multiline KEY=VAL to append to env
+    required: false
+    default: ''
+runs:
+  using: composite
+  steps:
+    - uses: actions/checkout@v4
+    - name: Azure login (Plan identity)
+      uses: azure/login@v2
+      with:
+        tenant-id: ${{ env.AZURE_TENANT_ID }}
+        subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+        client-id: ${{ env.AZURE_CLIENT_ID_PLAN }}
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: ${{ inputs.terraform-version }}
+    - name: Export TF_VAR_subscription_id
+      shell: bash
+      run: |
+        if [ -n "${SUBSCRIPTION_ID}" ]; then
+          echo "TF_VAR_subscription_id=${SUBSCRIPTION_ID}" >> "$GITHUB_ENV"
+        fi
+    - name: Append extra env vars
+      if: ${{ inputs.extra-env-vars != '' }}
+      shell: bash
+      run: echo "${{ inputs.extra-env-vars }}" >> "$GITHUB_ENV"
+    - name: Terraform Init (Azure OIDC backend)
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        terraform init \
+          -backend-config="resource_group_name=${TF_STATE_RG}" \
+          -backend-config="storage_account_name=${TF_STATE_STORAGE_ACCOUNT}" \
+          -backend-config="container_name=${TF_STATE_CONTAINER}" \
+          -backend-config="key=${TF_STATE_KEY}" \
+          -backend-config="use_azuread_auth=true" \
+          -backend-config="use_oidc=true"
+    - name: Terraform Fmt
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: terraform fmt -check -recursive
+    - name: Terraform Validate
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: terraform validate
+    - name: Install TFLint
+      shell: bash
+      run: |
+        curl -s https://raw.githubusercontent.com/terraform-linters/tflint/master/install_linux.sh | bash
+    - name: Run TFLint
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: tflint --init && tflint
+    - name: Terraform Plan
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: terraform plan -out=tfplan
+    - name: Azure login (Apply identity)
+      if: ${{ inputs.apply == 'true' }}
+      uses: azure/login@v2
+      with:
+        tenant-id: ${{ env.AZURE_TENANT_ID }}
+        subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+        client-id: ${{ env.AZURE_CLIENT_ID_APPLY }}
+    - name: Terraform Init (Apply)
+      if: ${{ inputs.apply == 'true' }}
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        terraform init \
+          -backend-config="resource_group_name=${TF_STATE_RG}" \
+          -backend-config="storage_account_name=${TF_STATE_STORAGE_ACCOUNT}" \
+          -backend-config="container_name=${TF_STATE_CONTAINER}" \
+          -backend-config="key=${TF_STATE_KEY}" \
+          -backend-config="use_azuread_auth=true" \
+          -backend-config="use_oidc=true"
+    - name: Terraform Apply
+      if: ${{ inputs.apply == 'true' }}
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: terraform apply -auto-approve tfplan
