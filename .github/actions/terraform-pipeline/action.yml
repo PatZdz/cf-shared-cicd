@@ -8,7 +8,7 @@ inputs:
   terraform-version:
     description: Terraform version
     required: false
-    default: '1.6.6'
+    default: '1.13.0'
   apply:
     description: Whether to apply the plan
     required: false
