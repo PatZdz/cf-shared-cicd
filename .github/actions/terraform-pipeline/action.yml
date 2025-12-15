@@ -1,5 +1,8 @@
 name: terraform-pipeline
 description: Validate, plan and optionally apply Terraform with Azure OIDC backend
+# Composite GitHub Action used by multiple repositories to run a standardised
+# Terraform pipeline (init, fmt, validate, tflint, plan, optional apply)
+# against an AzureRM remote backend authenticated via OIDC.
 inputs:
   working-directory:
     description: Directory with Terraform configuration
@@ -20,27 +23,42 @@ inputs:
 runs:
   using: composite
   steps:
+    # Always check out the repository so Terraform has access to the code
     - uses: actions/checkout@v4
+
+    # Authenticate to Azure using the "plan" identity and OIDC so that
+    # Terraform can access the remote backend and ARM APIs without secrets.
     - name: Azure login (Plan identity)
       uses: azure/login@v2
       with:
         tenant-id: ${{ env.AZURE_TENANT_ID }}
         subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
         client-id: ${{ env.AZURE_CLIENT_ID_PLAN }}
+
+    # Install a specific Terraform CLI version for reproducible plans.
     - name: Setup Terraform
       uses: hashicorp/setup-terraform@v3
       with:
         terraform_version: ${{ inputs.terraform-version }}
+
+    # Optionally export TF_VAR_subscription_id so modules can depend on the
+    # subscription ID without hardcoding it in configuration.
     - name: Export TF_VAR_subscription_id
       shell: bash
       run: |
         if [ -n "${SUBSCRIPTION_ID}" ]; then
           echo "TF_VAR_subscription_id=${SUBSCRIPTION_ID}" >> "$GITHUB_ENV"
         fi
+
+    # Allow callers to append arbitrary extra environment variables, e.g.
+    # TF_VAR_* or feature flags for specific pipelines.
     - name: Append extra env vars
       if: ${{ inputs.extra-env-vars != '' }}
       shell: bash
       run: echo "${{ inputs.extra-env-vars }}" >> "$GITHUB_ENV"
+
+    # Initialise the AzureRM backend using OIDC and AzureAD auth. All backend
+    # settings are provided through environment variables so code stays generic.
     - name: Terraform Init (Azure OIDC backend)
       shell: bash
       working-directory: ${{ inputs.working-directory }}
@@ -52,26 +70,41 @@ runs:
           -backend-config="key=${TF_STATE_KEY}" \
           -backend-config="use_azuread_auth=true" \
           -backend-config="use_oidc=true"
+
+    # Enforce Terraform formatting in CI to keep the codebase consistent.
     - name: Terraform Fmt
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       run: terraform fmt -check -recursive
+
+    # Validate Terraform configuration syntax and internal consistency.
     - name: Terraform Validate
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       run: terraform validate
+
+    # Install TFLint for static analysis of Terraform code.
     - name: Install TFLint
       shell: bash
       run: |
         curl -s https://raw.githubusercontent.com/terraform-linters/tflint/master/install_linux.sh | bash
+
+    # Run TFLint to catch common Terraform issues and style problems.
     - name: Run TFLint
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       run: tflint --init && tflint
+
+    # Generate a Terraform plan and persist it to tfplan. The same plan file
+    # is used later by the optional apply step to guarantee what-you-plan-is-
+    # what-you-apply.
     - name: Terraform Plan
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       run: terraform plan -out=tfplan
+
+    # Re-authenticate using the more privileged "apply" identity only when
+    # an apply has been requested.
     - name: Azure login (Apply identity)
       if: ${{ inputs.apply == 'true' }}
       uses: azure/login@v2
@@ -79,6 +112,9 @@ runs:
         tenant-id: ${{ env.AZURE_TENANT_ID }}
         subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
         client-id: ${{ env.AZURE_CLIENT_ID_APPLY }}
+
+    # Re-initialise the backend to ensure credentials and configuration are
+    # up to date before running terraform apply.
     - name: Terraform Init (Apply)
       if: ${{ inputs.apply == 'true' }}
       shell: bash
@@ -91,6 +127,8 @@ runs:
           -backend-config="key=${TF_STATE_KEY}" \
           -backend-config="use_azuread_auth=true" \
           -backend-config="use_oidc=true"
+
+    # Apply the previously generated plan file non-interactively.
     - name: Terraform Apply
       if: ${{ inputs.apply == 'true' }}
       shell: bash
